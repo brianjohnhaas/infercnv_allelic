@@ -194,6 +194,7 @@ task extract_covered_sites {
     >>>
     
     runtime {
+        docker: "ubuntu:latest"
         memory: "${machine_mem_mb} MiB"
         disks: "local-disk ${disk} HDD"
         cpu: cpu
@@ -225,6 +226,7 @@ task summarize_allelic_counts_outputs {
     >>>
 
     runtime {
+        docker: "ubuntu:latest"
         memory: "1000 MiB"
         disks: "local-disk 10 HDD"
         cpu: 1
@@ -237,21 +239,3 @@ task summarize_allelic_counts_outputs {
     
 }
 
-
-task get_bam_bai_files {
-
-    File input_bams_listing
-
-    command <<<
-
-        set -eou pipefail
-
-        cat ${input_bams_listing} | perl -lane ' print "$F[0]\t$F[0].bai"; '
-
-    >>>
-
-    output {
-        Array[Array[String]] bam_bai_files = read_tsv(stdout())
-    }
-
-}
