@@ -1,4 +1,3 @@
-
 workflow common_allele_counts_extraction {
 
     meta {
@@ -131,12 +130,12 @@ task allelic_counts {
     
     # runtime values
     String docker = "broadinstitute/gatk:4.1.4.1"
-    Int machine_mem_mb = 8250
+    Int machine_mem_gb = 15
     # give the command 1 GiB of overhead
-    Int command_mem_mb = machine_mem_mb - 1000
+    Int command_mem_gb = 10
     Int cpu = 2
     # use provided disk number or dynamically size on our own, with 10GiB of additional disk
-    Int disk = ceil(size(bam_file, "GiB") + size(vcf_file, "GiB") + 10)
+    Int disk = ceil(size(bam_file, "GiB") + 2* size(vcf_file, "GiB") + size(ref_genome_fa, "GiB") + 20)
     Int preemptible = 5
     
     String allelic_counts_filename =  basename(bam_file) + ".allelic_counts.tsv"
@@ -145,7 +144,7 @@ task allelic_counts {
 
        set -e
 	
-        java -Xmx${command_mem_mb}m -XX:ParallelGCThreads=${cpu} -jar /gatk/gatk.jar \
+        java -Xmx${command_mem_gb}G -XX:ParallelGCThreads=${cpu} -jar /gatk/gatk.jar \
              CollectAllelicCounts -I ${bam_file} \
                                   -R ${ref_genome_fa} \
                                   -L ${vcf_file} \
@@ -156,7 +155,7 @@ task allelic_counts {
   
      runtime {
         docker: docker
-        memory: "${machine_mem_mb} MiB"
+        memory: "${machine_mem_gb} GiB"
         disks: "local-disk ${disk} HDD"
         cpu: cpu
         preemptible: preemptible
@@ -181,7 +180,7 @@ task extract_covered_sites {
     Int command_mem_mb = machine_mem_mb - 1000
     Int cpu = 2
     # use provided disk number or dynamically size on our own, with 10GiB of additional disk
-    Int disk = ceil(size(allelic_counts_file, "GiB") + 10)
+    Int disk = ceil(2*size(allelic_counts_file, "GiB") + 10)
     Int preemptible = 5
 
     
@@ -238,4 +237,3 @@ task summarize_allelic_counts_outputs {
     }
     
 }
-
