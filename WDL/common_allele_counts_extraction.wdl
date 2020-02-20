@@ -6,7 +6,7 @@ workflow common_allele_counts_extraction {
     }
 
     ## file containing the list of bam files with gs:// paths
-    File input_bams_listing 
+    Array[String] input_bam_paths 
     
 
     ## common alleles / dbsnp
@@ -18,19 +18,13 @@ workflow common_allele_counts_extraction {
     File ref_genome_fai
     File ref_genome_dict
 
-    Array[Array[String]] bam_files = read_tsv(input_bams_listing)
 
-    call get_bam_bai_files as get_bams {
-        input:
-          input_bams_listing = input_bams_listing
-    }
-        
-    scatter(bam_bai_files in get_bams.bam_bai_files) {
+    scatter(bam_file_path in input_bam_paths) {
 
 	    call mark_duplicates as md {
 	        input:
-	          bam_file = bam_bai_files[0],
-	          bai_file = bam_bai_files[1]
+	          bam_file = bam_file_path,
+	          bai_file = bam_file_path + ".bai"
 	    }
         
 
