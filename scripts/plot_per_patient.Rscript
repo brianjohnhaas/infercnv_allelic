@@ -1,0 +1,88 @@
+#!/usr/bin/env Rscript
+
+library(tidyverse)
+library(reshape2)
+
+
+data = read.table("allele_freqs.restricted_het_sites_any.matrix", header=T, stringsAsFactors=F)
+data = melt(as.matrix(data))
+
+colnames(data) = c('chrpos', 'cellname', 'alleleRatio')
+
+
+data = data %>% separate(chrpos, "::", into=c('chr', 'pos'), remove=FALSE)
+data$chr = as.factor(data$chr)
+data$pos = as.numeric(data$pos)
+data$chr = gsub("chr", "", data$chr)
+
+data = data %>% filter(chr %in% c(1:22, 'X'))
+
+data$chr = ordered(data$chr, levels=c(1:22,'X'))
+
+data$cellname = as.character(data$cellname)
+
+chr_maxpos = data %>% group_by(chr) %>% summarize(maxpos = max(pos))
+chr_maxpos$minpos = 1
+
+data$alleleRatio[data$alleleRatio==0] = NA
+
+data = data %>% filter(! is.na(alleleRatio))
+
+data = data %>% rowwise() %>% mutate(patient=str_split(cellname, "[_\\.]")[[1]][1]) %>% ungroup()
+data$patient = as.factor(data$patient)
+
+patients = unique(data$patient)
+
+patient_data_frames = split(data, data$patient)
+
+for (this_patient in names(patient_data_frames)) {
+
+    patient_data = patient_data_frames[[this_patient]]
+
+    if (length(unique(patient_data$cellname)) < 10) { next; }
+
+    ## filtering variants and cells.
+
+    #counts_cells_w_cov = rowSums(data>0)
+    #data = data[counts_cells_w_cov>=3,]
+
+    ## require min number of cells per allelic variant:
+    snps_want = patient_data %>% group_by(chrpos) %>% tally() %>% filter(n>=5) %>% pull(chrpos)
+    patient_data = patient_data %>% filter(chrpos %in% snps_want)
+
+    ## must find het in at least one cell.
+    het_snps = patient_data %>% ungroup() %>% filter(alleleRatio > 0.25 & alleleRatio < 1) %>% group_by(chrpos) %>% tally() %>% pull(chrpos)
+    patient_data = patient_data %>% filter(chrpos %in% het_snps)  ## ideally, just examine in normals.
+
+    ## require min number of covered allelic sites per cell
+    cells_want = patient_data %>% group_by(cellname) %>% tally() %>% filter(n>50) %>% pull(cellname)
+    patient_data = patient_data %>% filter(cellname %in% cells_want)
+
+    p = ggplot(data=patient_data) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
+    theme_bw() +
+    theme(axis.ticks.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.title.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank()
+          ) +
+
+    geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
+    geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
+
+    geom_point(aes(x=pos, y=cellname, color=alleleRatio), alpha=0.6)
+
+    png_filename = paste0(this_patient, "_alleles.png")
+    png(png_filename, width=1100, height=600)
+    plot(p)
+    dev.off()
+
+
+    message("plotted ", png_filename)
+
+
+
+}
+
