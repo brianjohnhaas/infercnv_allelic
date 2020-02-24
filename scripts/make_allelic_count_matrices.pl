@@ -5,12 +5,100 @@ use warnings;
 use File::Basename;
 use List::Util qw(min max);
 
-my $usage = "\n\n\tusage: $0 allelic_files.tsv.file.listing\n\n";
+use Getopt::Long qw(:config posix_default no_ignore_case bundling pass_through);
 
-my $tsv_list_file = $ARGV[0] or die $usage;
 
-my $MIN_TOT_COV = 10;
+my $help_flag;
 
+my $allelic_counts_file_list_file;
+my $output_prefix;
+
+
+my $min_variant_coverage = 3;  # initial scanning of counts files
+
+my $min_cells_with_coverage = 3;  # filtering of variants
+my $min_het_cells_per_snp = 1;
+
+my $min_covered_variants_per_cell = 50;  # filtering of cells.
+
+my $low_range_het_snp_ratio = 0.25;
+my $high_range_het_snp_ratio = 0.75;
+
+
+
+my $usage = <<__EOUSAGE__;
+
+##################################################################################
+#
+#  * required:
+#
+#  --allelic_counts_file_list_file <string>   file containing the list of allelic counts files, one file per cell
+#
+#  --output_prefix <string>                   prefix for output filenames
+#
+#  * options w/ defaults
+# 
+#  Capturing variants:
+#  --min_variant_coverage <int>               min read coverage at a site to be captured from allelic counts file.
+#                                             (default: $min_variant_coverage)
+#
+#  Bulk filtering of variants:
+#
+#  --min_cells_with_coverage <int>            min number of cells with detected read coverage
+#                                             (default: $min_cells_with_coverage)
+#
+#  --min_het_cells_per_snp <int>              minimum cells that must have evidence as heterozygous
+#                                             (default: $min_het_cells_per_snp)
+#
+#  Bulk filtering of cells:
+#
+#  --min_covered_variants_per_cell <int>      minimum number of covered variants per cell
+#                                             (default: $min_covered_variants_per_cell)
+#
+#  Het site requirements:
+#
+#  --low_range_het_snp_ratio <float>          low range for het snp ratio
+#                                             (default: $low_range_het_snp_ratio)
+#  
+#  --high_range_het_snp_ratio <float>         high range for het snp ratio
+#                                             (default: $high_range_het_snp_ratio)
+#
+#####################################################################################
+
+
+
+__EOUSAGE__
+
+    ;
+
+
+
+&GetOptions ( 'h' => \$help_flag,
+              
+              'allelic_counts_file_list_file=s' => \$allelic_counts_file_list_file,
+              
+              'min_variant_coverage=i' => \$min_variant_coverage,
+              'min_cells_with_coverage=i' => \$min_cells_with_coverage,
+
+              'min_het_cells_per_snp=i' => \$min_het_cells_per_snp,
+              
+              'min_covered_variants_per_cell=i' => \$min_covered_variants_per_cell,
+              
+              'low_range_het_snp_ratio=f' => \$low_range_het_snp_ratio,
+              'high_range_het_snp_ratio=f' => \$high_range_het_snp_ratio,
+
+              'output_prefix=s' => \$output_prefix,
+
+    );
+
+
+if ($help_flag) {
+    die $usage;
+}
+
+unless ($allelic_counts_file_list_file) {
+    die $usage; 
+}
 
 main: {
 
@@ -18,9 +106,9 @@ main: {
     my %cell_names;
 
     my $counter = 0;
-    my $num_values = 0;
-
-    open(my $fh, $tsv_list_file) or die $!;
+    
+    print STDERR "## -parsing files.\n";
+    open(my $fh, $allelic_counts_file_list_file) or die "Error, cannot open file: $allelic_counts_file_list_file";
     while(<$fh>) {
         chomp;
         my $tsv_file = $_;
@@ -33,16 +121,22 @@ main: {
         
         $cell_names{$cell_name} = 1;
     
-        &process_tsv_file($tsv_file, $cell_name, \%data, \$num_values);
+        &process_tsv_file($tsv_file, $cell_name, \%data, $min_variant_coverage);
     }
     close $fh;
-    
-    
-    my @cells = sort keys %cell_names;
-    
+
+
+    print STDERR "## -filtering variants\n";
+    &filter_variants(\%data, $min_cells_with_coverage, $min_het_cells_per_snp, $low_range_het_snp_ratio, $high_range_het_snp_ratio);
+
+    print STDERR "## -filtering cells\n";
+
+    my @good_cells;
+    my $num_values = &filter_cells(\%data, $min_covered_variants_per_cell, \@good_cells);
+        
     my @chrpos = sort keys %data;
 
-    my $num_cells = scalar(@cells);
+    my $num_cells = scalar(@good_cells);
     my $num_chrpos = scalar(@chrpos);
 
     print STDERR "-matrix represents $num_chrpos snps vs. $num_cells cells\n";
@@ -51,13 +145,13 @@ main: {
         ## write the cell and chrpos names for use w/ the sparse matrices.
         
         {
-            open (my $ofh, ">cells.names") or die $!;
-            print $ofh join("\n", @cells) . "\n";
+            open (my $ofh, ">$output_prefix.cells.names") or die $!;
+            print $ofh join("\n", @good_cells) . "\n";
             close $ofh;
         }
         
         {
-            open (my $ofh, ">chrpos.names") or die $!;
+            open (my $ofh, ">$output_prefix.chrpos.names") or die $!;
             print $ofh join("\n", @chrpos) . "\n";
             close $ofh;
         }
@@ -65,21 +159,21 @@ main: {
     
     
 
-    my $num_cell_cols = scalar(@cells);
+    my $num_cell_cols = scalar(@good_cells);
     my $num_chrpos_rows = scalar(@chrpos);
 
     my $MM_header = "%%MatrixMarket matrix coordinate real general\n" 
         . join("\t", $num_chrpos_rows, $num_cell_cols, $num_values) . "\n";
     
-    my $malt_allele_counts_matrix_file = "allele.malt.counts.matrix";
+    my $malt_allele_counts_matrix_file = "$output_prefix.malt.counts.matrix";
     open(my $ofh_malt, ">$malt_allele_counts_matrix_file") or die $!;
     print $ofh_malt $MM_header;
     
-    my $tot_counts_matrix_file = "allele.tot.counts.matrix";
+    my $tot_counts_matrix_file = "$output_prefix.tot.counts.matrix";
     open(my $ofh_tot, ">$tot_counts_matrix_file") or die $!;
     print $ofh_tot $MM_header;
     
-    my $allele_malt_freq_matrix_file = "allele.malt_freqs.matrix";
+    my $allele_malt_freq_matrix_file = "$output_prefix.malt_ratios.matrix";
     open(my $ofh_freq, ">$allele_malt_freq_matrix_file") or die $!;
     print $ofh_freq $MM_header;
     
@@ -88,7 +182,7 @@ main: {
         $snp_counter++;
         
         my $cell_counter = 0;
-        foreach my $cell (@cells) {
+        foreach my $cell (@good_cells) {
             $cell_counter++;
             
             if (exists $data{$snp}->{$cell}) {
@@ -126,7 +220,7 @@ main: {
 
 ####
 sub process_tsv_file {
-    my ($tsv_file, $cell_name, $data_href, $num_values_sref) = @_;
+    my ($tsv_file, $cell_name, $data_href, $min_variant_coverage) = @_;
             
     print STDERR "-processing $cell_name\n";
     
@@ -139,16 +233,96 @@ sub process_tsv_file {
         my $chrpos = join("::", $CONTIG, $POSITION);
         my $tot_cov = $REF_COUNT + $ALT_COUNT;
         
-        if ($tot_cov >= $MIN_TOT_COV) {
-
+        if ($tot_cov >= $min_variant_coverage) {
+            
             $data_href->{$chrpos}->{$cell_name}->{ALT} = $ALT_COUNT;
             $data_href->{$chrpos}->{$cell_name}->{TOT} = $tot_cov;
             
-            $$num_values_sref++;
         }
     }
     close $fh;
         
 }
 
+
+####
+sub filter_variants {
+    my ($data_href, 
+        $min_cells_with_coverage, $min_het_cells_per_snp, 
+        $low_range_het_snp_ratio, $high_range_het_snp_ratio) = @_;
+
+    
+    my %snps_to_purge;
+
+    foreach my $snp (keys %$data_href) {
+        
+        my @cells = keys %{$data_href->{$snp}};
+        
+        ## see if sufficient number of cells
+        my $num_cells = scalar(@cells);
+        if ($num_cells < $min_cells_with_coverage) {
+            $snps_to_purge{$snp} = 1;
+            next;
+        }
+
+        # count number of het sites
+        my $num_het_sites = 0;
+        foreach my $cell (@cells) {
+            my $alt_allele_count = $data_href->{$snp}->{$cell}->{ALT};
+            my $tot_count = $data_href->{$snp}->{$cell}->{TOT};
+
+            my $ratio = $alt_allele_count / $tot_count;
+            
+            if ($ratio >= $low_range_het_snp_ratio && $ratio <= $high_range_het_snp_ratio) {
+                $num_het_sites++;
+            }
+        }
+
+        if ($num_het_sites < $min_het_cells_per_snp) {
+            $snps_to_purge{$snp} = 1;
+            next;
+        }
+        
+    }
+    
+    print STDERR "--purging " . scalar(keys(%snps_to_purge)) . "\n";
+    foreach my $snp (keys %snps_to_purge) {
+        delete $data_href->{$snp};
+    }
+
+    print STDERR "--remaining variants: " . scalar(keys(%$data_href)) . "\n";
+    
+    return;
+}
+
+####
+sub filter_cells {
+    my ($data_href, $min_covered_variants_per_cell, $good_cells_aref) = @_;
+    
+
+    my %cell_to_variant_counter;
+    
+    foreach my $snp (keys %$data_href) {
+        
+        my @cells = keys %{$data_href->{$snp}};
+        
+        foreach my $cell (@cells) {
+            $cell_to_variant_counter{$cell}++;
+        }
+    }
+
+    
+    my $num_data_points = 0;
+    foreach my $cell (keys %cell_to_variant_counter) {
+        my $num_covered_variants = $cell_to_variant_counter{$cell};
+
+        if ($num_covered_variants >= $min_covered_variants_per_cell) {
+            push(@$good_cells_aref, $cell);
+            $num_data_points += $num_covered_variants;
+        }
+    }
+    
+    return($num_data_points);
+    
+}
 
