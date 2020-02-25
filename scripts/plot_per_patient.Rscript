@@ -3,8 +3,18 @@
 library(tidyverse)
 library(reshape2)
 
+args<-commandArgs(TRUE)
 
-data = read.table("allele_freqs.restricted_het_sites_any.matrix", header=T, stringsAsFactors=F)
+if (length(args) == 0) {
+    stop("require param: malt_ratios.wNames.matrix")
+}
+
+
+dat_filename = args[1]
+
+
+
+data = read.table(dat_filename, header=T, stringsAsFactors=F)
 data = melt(as.matrix(data))
 
 colnames(data) = c('chrpos', 'cellname', 'alleleRatio')
