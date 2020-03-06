@@ -12,6 +12,8 @@ parser$add_argument("--output_image_filename", help="output image file name", re
 parser$add_argument("--cell_annots_file", help="cell type annotation file", required=TRUE, nargs=1)
 parser$add_argument("--malignant_cell_types", help="malignant cell types, comma-delimited (rest considered normals)", required=TRUE, nargs=1)
 
+parser$add_argument("--infercnv_obj", help="infercnv object for co-plotting", required=FALSE, default=NULL, nargs=1)
+
 
 args = parser$parse_args()
 
@@ -21,6 +23,7 @@ allelic_fraction_matrix_file = args$allelic_fraction_matrix
 output_image_filename = args$output_image_filename
 cell_annots_file = args$cell_annots_file
 
+infercnv_obj = args$infercnv_obj
 
 malignant_cell_types = strsplit(args$malignant_cell_types, "\\s*,\\s*")[[1]]
 
@@ -33,6 +36,24 @@ library(reshape2)
 ## ###############################
 
 dotsize=0.3
+
+
+## parsing annotation coordinates
+gencode_gene_pos = read.table(gene_coords_file, header=F, row.names=NULL, stringsAsFactors=F)
+colnames(gencode_gene_pos) = c('genename', 'seqnames', 'start', 'end')
+
+gencode_gene_pos$chr = str_replace(string=gencode_gene_pos$seqnames, pattern="chr", replacement="")
+
+gencode_gene_pos = gencode_gene_pos %>% filter(chr %in% 1:22)
+
+gencode_gene_pos = gencode_gene_pos %>% mutate(chr = ordered(chr, levels=1:22))
+
+gencode_gene_pos$pos = as.numeric( (gencode_gene_pos$start + gencode_gene_pos$end)/2)
+
+
+## get chr bounds for plotting later.
+chr_maxpos = gencode_gene_pos %>% group_by(chr) %>% summarize(maxpos = max(pos))
+chr_maxpos$minpos = 1
 
 
 ## parse cell annotations
@@ -48,9 +69,6 @@ if (length(malignant_cells_idx) == 0) {
 
 
 message("-building expression plot")
-
-gencode_gene_pos = read.table(gene_coords_file, header=F, row.names=NULL)
-colnames(gencode_gene_pos) = c('genename', 'seqnames', 'start', 'end')
 
 data = read.table(rnaseq_counts_matrix_file, header=T, sep="\t")
 data = t( t(data)/colSums(data)) * 1e6 # cpm normalization
@@ -79,19 +97,8 @@ gexp.melt = melt(gexp.norm)
 colnames(gexp.melt) = c('genename', 'cell', 'exp.norm')
 
 data = left_join(gexp.melt, gencode_gene_pos, key='genename')
-data$chr = str_replace(string=data$seqnames, pattern="chr", replacement="")
 
-data = data %>% filter(chr %in% 1:22)
-
-
-data = data %>% mutate(chr = ordered(chr, levels=1:22))
-
-data$pos = as.numeric( (data$start + data$end)/2)
-
-
-## get chr bounds for plotting later.
-chr_maxpos = data %>% group_by(chr) %>% summarize(maxpos = max(pos))
-chr_maxpos$minpos = 1
+data = data %>% filter(! is.na(chr))
 
 ## do smoothing by cell and chr.
 
@@ -142,10 +149,62 @@ expr_plot = ggplot(data=data) + facet_grid (~chr, scales = 'free_x', space = 'fi
 
     geom_point(aes(x=pos, y=cell, color=exp.norm.smoothed), alpha=0.6, size=dotsize) +
 
-    scale_colour_gradient2(low = "blue", mid = "white",
-                           high = "red", midpoint = 0,
+    scale_colour_gradient2(low = "blue",
+                           mid = "white",
+                           high = "red",
+                           midpoint = 0,
                            space = "Lab",
-                           na.value = "grey50", guide = "colourbar", aesthetics = "colour")
+                           guide = "colourbar",
+                           aesthetics = "colour")
+
+
+
+
+########################
+## InferCNV integration
+########################
+
+infercnv_plot = NULL
+
+if (! is.null(infercnv_obj)) {
+    library(infercnv)
+
+    infercnv_obj = readRDS(infercnv_obj)
+    expr.data = infercnv_obj@expr.data
+    expr.data = expr.data[, unlist(infercnv_obj@observation_grouped_cell_indices)] # just the tumor cells
+    expr.data = melt(expr.data)
+
+    colnames(expr.data) = c('genename', 'cell', 'exp.norm')
+    expr.data = left_join(expr.data, gencode_gene_pos, key='genename')
+
+    infercnv_plot = ggplot(data=expr.data) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
+        theme_bw() +
+        theme(axis.ticks.x = element_blank(),
+              axis.text.x = element_blank(),
+              axis.title.x = element_blank(),
+              panel.grid.major.x = element_blank(),
+              panel.grid.minor.x = element_blank(),
+              panel.grid.major.y = element_blank(),
+              panel.grid.minor.y = element_blank()
+              ) +
+
+        geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
+        geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
+
+        geom_point(aes(x=pos, y=cell, color=exp.norm), alpha=0.6, size=dotsize) +
+
+        scale_colour_gradient2(low = "blue",
+                               mid = "white",
+                               high = "red",
+                               midpoint = 1,
+                               space = "Lab",
+                               guide = "colourbar",
+                               aesthetics = "colour")
+
+}
+
+
+
 
 
 
@@ -221,7 +280,12 @@ snps_plot = ggplot(data=data) + facet_grid (~chr, scales = 'free_x', space = 'fi
 
 message("-writing image")
 
-pg = plot_grid(expr_plot, snps_plot, ncol=1, align='v')
+pg = NULL
+if (! is.null(infercnv_plot)) {
+    pg = plot_grid(expr_plot, infercnv_plot, snps_plot, ncol=1, align='v')
+} else {
+    pg = plot_grid(expr_plot, snps_plot, ncol=1, align='v')
+}
 
 ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
 
