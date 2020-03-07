@@ -43,11 +43,8 @@ gencode_gene_pos = read.table(gene_coords_file, header=F, row.names=NULL, string
 colnames(gencode_gene_pos) = c('genename', 'seqnames', 'start', 'end')
 
 gencode_gene_pos$chr = str_replace(string=gencode_gene_pos$seqnames, pattern="chr", replacement="")
-
 gencode_gene_pos = gencode_gene_pos %>% filter(chr %in% 1:22)
-
 gencode_gene_pos = gencode_gene_pos %>% mutate(chr = ordered(chr, levels=1:22))
-
 gencode_gene_pos$pos = as.numeric( (gencode_gene_pos$start + gencode_gene_pos$end)/2)
 
 
@@ -58,12 +55,12 @@ chr_maxpos$minpos = 1
 
 ## parse cell annotations
 
-cell_annots = read.table(cell_annots_file, header=F, row.names=NULL, sep="\t")
+cell_annots = read.table(cell_annots_file, header=F, row.names=NULL, sep="\t", stringsAsFactors=F)
 colnames(cell_annots) = c('cell', 'celltype')
 
-malignant_cells_idx = which(cell_annots$celltype %in% malignant_cell_types)
-if (length(malignant_cells_idx) == 0) {
-    stop("Error, cannot extract malignant cells from counts matrix")
+malignant_cells = cell_annots$cell[cell_annots$celltype %in% malignant_cell_types]
+if (length(malignant_cells) == 0) {
+    stop("Error, cannot extract malignant cells from ", cell_annots_file)
 }
 
 
@@ -79,6 +76,8 @@ zscaled_data[is.nan(zscaled_data)] = 0
 gexp.norm = zscaled_data
 
 ## subtract normals:
+
+malignant_cells_idx = which(colnames(gexp.norm) %in% malignant_cells)
 
 normal_reference_data = gexp.norm[,-malignant_cells_idx]
 
@@ -123,11 +122,24 @@ data = do.call(rbind, lapply(splitdata, function(x) {
     return(x)
     } ) )
 
+
+## cluster cells according to expr pattern:
+gene_expr_matrix = data %>% select(genename, cell, exp.norm.smoothed) %>% spread(key=cell, value=exp.norm.smoothed)
+
+rownames(gene_expr_matrix) = gene_expr_matrix$genename
+gene_expr_matrix = gene_expr_matrix[,-1]
+h = hclust(dist(t(gene_expr_matrix)))
+ordered_cells = colnames(gene_expr_matrix)[h$order]
+
+data$cell = ordered(data$cell, levels=ordered_cells)
+
 ## set up base plot
 ## define chr boundaries based on max coordinates for now.
 
-data$exp.norm.smoothed[data$exp.norm.smoothed < -3] = -3
-data$exp.norm.smoothed[data$exp.norm.smoothed > 3] = 3
+q = quantile(data$exp.norm.smoothed, c(0.025, 0.975))
+
+data$exp.norm.smoothed[data$exp.norm.smoothed < q[1] ] = q[1]
+data$exp.norm.smoothed[data$exp.norm.smoothed > q[2] ] = q[2]
 
 noise_range = 0.2
 data$exp.norm.smoothed[data$exp.norm.smoothed > -noise_range & data$exp.norm.smoothed < noise_range] = 0
@@ -172,9 +184,19 @@ if (! is.null(infercnv_obj)) {
     infercnv_obj = readRDS(infercnv_obj)
     expr.data = infercnv_obj@expr.data
     expr.data = expr.data[, unlist(infercnv_obj@observation_grouped_cell_indices)] # just the tumor cells
+
+    h = hclust(dist(t(expr.data)))
+    ordered_cells = colnames(expr.data)[h$order]
+    expr.data = expr.data[,ordered_cells]
+
     expr.data = melt(expr.data)
 
-    colnames(expr.data) = c('genename', 'cell', 'exp.norm')
+    colnames(expr.data) = c('genename', 'cell', 'value')
+
+    q = quantile(expr.data$value, c(0.025, 0.975))
+    expr.data$value[expr.data$value < q[1] ] = q[1]
+    expr.data$value[expr.data$value > q[2] ] = q[2]
+
     expr.data = left_join(expr.data, gencode_gene_pos, key='genename')
 
     infercnv_plot = ggplot(data=expr.data) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
@@ -191,7 +213,7 @@ if (! is.null(infercnv_obj)) {
         geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
         geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
 
-        geom_point(aes(x=pos, y=cell, color=exp.norm), alpha=0.6, size=dotsize) +
+        geom_point(aes(x=pos, y=cell, color=value), alpha=0.6, size=dotsize) +
 
         scale_colour_gradient2(low = "blue",
                                mid = "white",
