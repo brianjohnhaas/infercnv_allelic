@@ -20,16 +20,17 @@ output_filename = args$output
 library(Matrix)
 data = readMM(file=malt_ratios_file)
 
-cell_annots = read.table(cell_names_file)[,1]
+cell_annots = read.table(cell_names_file, header=F, stringsAsFactors=F, check.names=F)[,1]
+cell_annots = gsub("-", "_", cell_annots)
 
-chrpos = read.table(chrpos_names_file)[,1]
+chrpos = read.table(chrpos_names_file, header=F, stringsAsFactors=F, check.names=F)[,1]
+
+
+data = as.matrix(data)
 
 colnames(data) = cell_annots
 rownames(data) = chrpos
 
-
-
-data = as.matrix(data)
 
 write.table(data, file=output_filename, quote=F, sep="\t")
 

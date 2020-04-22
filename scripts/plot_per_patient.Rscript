@@ -15,6 +15,7 @@ dat_filename = args[1]
 
 
 data = read.table(dat_filename, header=T, stringsAsFactors=F)
+
 data = melt(as.matrix(data))
 
 colnames(data) = c('chrpos', 'cellname', 'alleleRatio')
