@@ -35,7 +35,7 @@ for (patient in names(patient_groupings)) {
     patient_allele_matrix_file = paste0(patient, ".AF.matrix")
     message("-writing allele matrix file: ", patient_allele_matrix_file)            
     patient_AF_matrix = data_AF_matrix[, colnames(data_AF_matrix) %in% cells]
-    write.table(patient_AF_matrix, file=patient_allele_matrix_file, quote=F, sep="\t", row.names=F)
+    write.table(patient_AF_matrix, file=patient_allele_matrix_file, quote=F, sep="\t", row.names=T)
     
 }
 
