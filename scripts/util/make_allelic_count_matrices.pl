@@ -24,6 +24,7 @@ my $min_covered_variants_per_cell = 50;  # filtering of cells.
 my $low_range_het_snp_ratio = 0.25;
 my $high_range_het_snp_ratio = 0.75;
 
+my $SMALL_NONZERO_VALUE = 1e-3;
 
 
 my $usage = <<__EOUSAGE__;
@@ -196,10 +197,10 @@ main: {
                     die "Error, no tot count for $snp, $cell";
                 }
                 unless ($alt_allele_count > 0) {
-                    $alt_allele_count = 1e-3; # make it small but nonzero
+                    $alt_allele_count = $SMALL_NONZERO_VALUE; # make it small but nonzero to differentiate from true zeros when converting to a full matrix from sparse matrix
                 }
                 
-                my $alt_allele_freq = sprintf("%.3f", $alt_allele_count / $tot_count);
+                my $alt_allele_freq = sprintf("%.3f", max($alt_allele_count / $tot_count, $SMALL_NONZERO_VALUE));
                 
                 ## output matrix elements
 
