@@ -27,6 +27,8 @@ library(reshape2)
 
 dotsize=0.3
 
+gcinfo(TRUE)
+
 ## parsing annotation coordinates
 gencode_gene_pos = read.table(gene_coords_file, header=F, row.names=NULL, stringsAsFactors=F)
 colnames(gencode_gene_pos) = c('genename', 'seqnames', 'start', 'end')
@@ -46,6 +48,13 @@ chr_maxpos$minpos = 1
 message("-getting cell annotations")
 cell_annots = read.table(cell_annots_file, header=F, row.names=NULL, sep="\t", stringsAsFactors=F)
 colnames(cell_annots) = c('cell', 'celltype')
+
+
+malignant_cells_idx = grep("malignant", cell_annots$celltype, value=F)
+normal_cells = cell_annots$cell[-malignant_cells_idx]
+malignant_cells = cell_annots$cell[malignant_cells_idx]
+
+
 
 ## cluster cells according to expr pattern:
 #gene_expr_matrix = data %>% select(genename, cell, exp.norm.smoothed) %>% spread(key=cell, value=exp.norm.smoothed)
@@ -69,27 +78,42 @@ message("-building snp plot")
 message("parsing matrix: ", allelic_fraction_matrix_file);
 allele_matrix = read.table(allelic_fraction_matrix_file, header=T, row.names=1, check.names=F)
 
+## filter snps, require at least 3 cells have coverage
+min.cells = 3
+cells_w_cov = rowSums(allele_matrix>0)
+allele_matrix = allele_matrix[cells_w_cov >= min.cells, ]
+
+
+normal_cells_matrix = allele_matrix[, colnames(allele_matrix) %in% normal_cells]
+
+## get normal hets.
+normal_het_sites = rownames(normal_cells_matrix)[ rowSums(normal_cells_matrix > 0.25 & normal_cells_matrix < 0.75) >= 3 ]
+
+allele_matrix = allele_matrix[rownames(allele_matrix) %in% normal_het_sites, ]
+
+
 message("melting matrix.")
-r_melt = melt(as.matrix(allele_matrix))
-colnames(r_melt) = c('chrpos', 'cell', 'AF')
+datamelt = melt(as.matrix(allele_matrix))
+colnames(datamelt) = c('chrpos', 'cell', 'AF')
+
 
 ## include chr and postion separately.
-data = r_melt %>% separate(chrpos, "::", into=c('seqnames', 'pos'), remove=FALSE)
+datamelt = r_melt %>% separate(chrpos, "::", into=c('seqnames', 'pos'), remove=FALSE)
+gc()
 
-data$chr = str_replace(string=data$seqnames, pattern="chr", replacement="")
-data = data %>% filter(chr %in% 1:22)
+datamelt$chr = str_replace(string=datamelt$seqnames, pattern="chr", replacement="")
+gc()
 
-data = data %>% mutate(chr = ordered(chr, levels=1:22))
-data$pos = as.numeric(data$pos)
+datamelt = datamelt %>% filter(chr %in% 1:22)
+
+datamelt = datamelt %>% mutate(chr = ordered(chr, levels=1:22))
+datamelt$pos = as.numeric(datamelt$pos)
 
 
 ## get chr bounds for plotting later.
-chr_maxpos = data %>% group_by(chr) %>% summarize(maxpos = max(pos))
+chr_maxpos = datamelt %>% group_by(chr) %>% summarize(maxpos = max(pos))
 chr_maxpos$minpos = 1
 
-## select snps where the fraction of cells containing an allelic site is between 0.1 and 0.9 of cells with read coverage.
-#het_snps = data %>% group_by(chrpos) %>%  mutate(l=sum(alleleCov>0), n.bulk=sum(totCov>0), E=l/n.bulk) %>% filter(E>0.1 & E<0.9) %>% pull('chrpos')
-#data = data %>% filter(chrpos %in% het_snps)
 
 
 #cell_groupings = split(cell_annots, cell_annots$celltype)
@@ -98,65 +122,66 @@ chr_maxpos$minpos = 1
 
 #cells_want = cell_groupings[cell_grouping][[1]]$cell
 
-#    data = data[,colnames(data) %in% cells_want]
-    
-    ## filter snps, require at least 3 cells have coverage
-    min.cells = 3
-    snps_min_cells = data %>%  filter(AF > 0) %>% group_by(chrpos) %>% tally() %>% filter(n>=min.cells) %>% pull(chrpos)
-    data = data %>% filter(chrpos %in% snps_min_cells)
-    
-    data = data %>% mutate(mBAF = pmax(AF, 1-AF))
-    
-    ## further restrict to het snps based on allele frequency data
-    het_snps = data %>% filter(AF > 0.25 & AF < 0.75) %>% group_by(chrpos) %>% tally() %>% filter(n>=3) %>% pull(chrpos)
-    
-    data = data %>% filter(chrpos %in% het_snps)
-    
-    
-    data = data %>% filter(AF > 0)  ## just here
-    
-    
-    ## set up base plot
-    ## define chr boundaries based on max coordinates for now.
-    
-    
-    snps_plot = ggplot(data=data) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
-        theme_bw() +
-        theme(axis.ticks.x = element_blank(),
-              axis.text.x = element_blank(),
-              axis.title.x = element_blank(),
-              panel.grid.major.x = element_blank(),
-              panel.grid.minor.x = element_blank(),
-              panel.grid.major.y = element_blank(),
-              panel.grid.minor.y = element_blank()
+#    datamelt = datamelt[,colnames(datamelt) %in% cells_want]
+
+
+datamelt = datamelt %>% filter(AF > 0)  ## just here
+
+#    datamelt = datamelt %>% mutate(mBAF = pmax(AF, 1-AF))
+
+## further restrict to het snps based on allele frequency datamelt
+het_snps = datamelt %>% filter(AF > 0.25 & AF < 0.75) %>% group_by(chrpos) %>% tally() %>% filter(n>=3) %>% pull(chrpos)
+
+datamelt = datamelt %>% filter(chrpos %in% het_snps)
+
+
+normal_datamelt = datamelt %>% filter(cell %in% normal_cells)
+
+
+normal_snps_plot = ggplot(data=normal_datamelt) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
+    theme_bw() +
+    theme(axis.ticks.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.title.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank()
               ) +
 
     geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
     geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
-    
-    geom_point(aes(x=pos, y=cell, color=mBAF), alpha=0.6, size=dotsize) + scale_radius()
-    
-    
-    message("-writing image")
-    
-    png("test.alleles.png")
-    plot(snps_plot)
-    dev.off()
 
-    stop("debug stop")
-    
-#}
+    geom_point(aes(x=pos, y=cell, color=AF), alpha=0.6, size=dotsize) + scale_radius() +
+    scale_color_gradient(low="blue", high="red")
 
 
+malignant_datamelt = datamelt %>% filter(cell %in% malignant_cells)
 
-#pg = NULL
-#if (! is.null(infercnv_plot)) {
-#    pg = plot_grid(expr_plot, infercnv_plot, snps_plot, ncol=1, align='v')
-#} else {
-#    pg = plot_grid(expr_plot, snps_plot, ncol=1, align='v')
-#}
+malignant_snps_plot = ggplot(data=malignant_datamelt) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
+    theme_bw() +
+    theme(axis.ticks.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.title.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank()
+          ) +
 
-#ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
+    geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
+    geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
+
+    geom_point(aes(x=pos, y=cell, color=AF), alpha=0.6, size=dotsize) + scale_radius() +
+    scale_color_gradient(low="blue", high="red")
+
+
+message("-writing image")
+
+pg = plot_grid(normal_snps_plot, malignant_snps_plot, ncol=1, align='v')
+
+
+ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
 
 
 
