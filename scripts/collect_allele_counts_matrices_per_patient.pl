@@ -68,15 +68,17 @@ main: {
         close $patient_cell_types_ofh;
         close $patient_allele_files_ofh;
         
+        
+    
+        my $cmd = "$FindBin::Bin/util/make_allelic_count_matrices.pl --allelic_counts_file_list_file $patient.allelic_files --output_prefix $patient ";
+        &process_cmd($cmd);
+        
+        $cmd = "$FindBin::Bin/util/sparse_to_regular_matrix.R --alt_ratios $patient.alt_ratios.matrix --cell_names $patient.cells.names --chrpos_names $patient.chrpos.names --output $patient.AF.matrix";
+        &process_cmd($cmd);
     }
-    
-    my $cmd = "$FindBin::Bin/util/make_allelic_count_matrices.pl --allelic_counts_file_list_file $patient.allelic_files --output_prefix $patient ";
-    &process_cmd($cmd);
-
-    
-
+   
     print STDERR "done.\n";
-
+    
     exit(0);
 }
 
