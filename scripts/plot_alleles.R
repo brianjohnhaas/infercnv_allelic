@@ -3,8 +3,6 @@
 suppressPackageStartupMessages(library("argparse"))
 parser = ArgumentParser()
 
-
-
 parser$add_argument("--gene_coords", help="input gene coords file", required=TRUE, nargs=1)
 parser$add_argument("--allelic_fraction_matrix", help="allelic fraction matrix", required=TRUE, nargs=1)
 parser$add_argument("--output_image_filename", help="output image file name", required=TRUE, nargs=1)
@@ -78,18 +76,36 @@ message("-building snp plot")
 message("parsing matrix: ", allelic_fraction_matrix_file);
 allele_matrix = read.table(allelic_fraction_matrix_file, header=T, row.names=1, check.names=F)
 
-## filter snps, require at least 3 cells have coverage
+
+## filter snps, require at least x number of cells have evidence of each allelic variant
 min.cells = 3
-cells_w_cov = rowSums(allele_matrix>0)
-allele_matrix = allele_matrix[cells_w_cov >= min.cells, ]
+cells_w_ref_allele = rowSums(allele_matrix != 0 & allele_matrix < 0.5)
+cells_w_alt_allele = rowSums(allele_matrix != 0 & allele_matrix > 0.5)
+
+allele_matrix = allele_matrix[(cells_w_ref_allele >= min.cells & cells_w_alt_allele >= min.cells), ]
+
+num_snps_all = nrow(allele_matrix)
+message("-num het snps used: ", num_snps_all)
+
+write.table(allele_matrix, file=paste0(allelic_fraction_matrix_file, num_snps_all, ".af.matrix"), quote=F, sep="\t")
 
 
-normal_cells_matrix = allele_matrix[, colnames(allele_matrix) %in% normal_cells]
+## reset the alt allele fraction to the cell-population minor allele frequency
 
-## get normal hets.
-normal_het_sites = rownames(normal_cells_matrix)[ rowSums(normal_cells_matrix > 0.25 & normal_cells_matrix < 0.75) >= 3 ]
+message("-setting alt allele fraction to the cell-population minor allele fraction")
+mAF_allele_matrix = apply(allele_matrix, 1, function(x) {
+    nonzero_val_idx = which(x>0)
+    nonzero_vals = x[nonzero_val_idx]
+    frac_high = sum(nonzero_vals>0.5)/length(nonzero_vals)
+    if ( frac_high > 0.5) {
+        x[x==1] = 0.999
+        x[nonzero_val_idx ] = 1 - x[nonzero_val_idx]
+    }
+    x
+})
 
-allele_matrix = allele_matrix[rownames(allele_matrix) %in% normal_het_sites, ]
+allele_matrix = t(mAF_allele_matrix)
+
 
 
 message("melting matrix.")
@@ -98,7 +114,7 @@ colnames(datamelt) = c('chrpos', 'cell', 'AF')
 
 
 ## include chr and postion separately.
-datamelt = r_melt %>% separate(chrpos, "::", into=c('seqnames', 'pos'), remove=FALSE)
+datamelt = datamelt %>% separate(chrpos, "::", into=c('seqnames', 'pos'), remove=FALSE)
 gc()
 
 datamelt$chr = str_replace(string=datamelt$seqnames, pattern="chr", replacement="")
@@ -125,14 +141,15 @@ chr_maxpos$minpos = 1
 #    datamelt = datamelt[,colnames(datamelt) %in% cells_want]
 
 
-datamelt = datamelt %>% filter(AF > 0)  ## just here
+datamelt = datamelt %>% filter(AF > 0)  ## if AF==0, then means we have no coverage.
+
 
 #    datamelt = datamelt %>% mutate(mBAF = pmax(AF, 1-AF))
 
 ## further restrict to het snps based on allele frequency datamelt
-het_snps = datamelt %>% filter(AF > 0.25 & AF < 0.75) %>% group_by(chrpos) %>% tally() %>% filter(n>=3) %>% pull(chrpos)
+#het_snps = datamelt %>% filter(AF > 0.25 & AF < 0.75) %>% group_by(chrpos) %>% tally() %>% filter(n>=3) %>% pull(chrpos)
 
-datamelt = datamelt %>% filter(chrpos %in% het_snps)
+#datamelt = datamelt %>% filter(chrpos %in% het_snps)
 
 
 normal_datamelt = datamelt %>% filter(cell %in% normal_cells)
@@ -178,7 +195,10 @@ malignant_snps_plot = ggplot(data=malignant_datamelt) + facet_grid (~chr, scales
 
 message("-writing image")
 
-pg = plot_grid(normal_snps_plot, malignant_snps_plot, ncol=1, align='v')
+num_normal_cells = length(normal_cells)
+num_malignant_cells = length(malignant_cells)
+
+pg = plot_grid(normal_snps_plot, malignant_snps_plot, ncol=1, align='v', rel_heights=c(num_normal_cells, num_malignant_cells))
 
 
 ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
