@@ -24,6 +24,7 @@ my $min_covered_variants_per_cell = 50;  # filtering of cells.
 my $low_range_het_snp_ratio = 0.25;
 my $high_range_het_snp_ratio = 0.75;
 
+my $SMALL_NONZERO_VALUE = 1e-3;
 
 
 my $usage = <<__EOUSAGE__;
@@ -122,6 +123,7 @@ main: {
         $cell_names{$cell_name} = 1;
     
         &process_tsv_file($tsv_file, $cell_name, \%data, $min_variant_coverage);
+        
     }
     close $fh;
 
@@ -165,16 +167,16 @@ main: {
     my $MM_header = "%%MatrixMarket matrix coordinate real general\n" 
         . join("\t", $num_chrpos_rows, $num_cell_cols, $num_values) . "\n";
     
-    my $malt_allele_counts_matrix_file = "$output_prefix.malt.counts.matrix";
-    open(my $ofh_malt, ">$malt_allele_counts_matrix_file") or die $!;
-    print $ofh_malt $MM_header;
+    my $alt_allele_counts_matrix_file = "$output_prefix.alt.counts.matrix";
+    open(my $ofh_alt, ">$alt_allele_counts_matrix_file") or die $!;
+    print $ofh_alt $MM_header;
     
     my $tot_counts_matrix_file = "$output_prefix.tot.counts.matrix";
     open(my $ofh_tot, ">$tot_counts_matrix_file") or die $!;
     print $ofh_tot $MM_header;
     
-    my $allele_malt_freq_matrix_file = "$output_prefix.malt_ratios.matrix";
-    open(my $ofh_freq, ">$allele_malt_freq_matrix_file") or die $!;
+    my $allele_alt_freq_matrix_file = "$output_prefix.alt_ratios.matrix";
+    open(my $ofh_freq, ">$allele_alt_freq_matrix_file") or die $!;
     print $ofh_freq $MM_header;
     
     my $snp_counter = 0;
@@ -194,21 +196,23 @@ main: {
                 unless ($tot_count) {
                     die "Error, no tot count for $snp, $cell";
                 }
+                unless ($alt_allele_count > 0) {
+                    $alt_allele_count = $SMALL_NONZERO_VALUE; # make it small but nonzero to differentiate from true zeros when converting to a full matrix from sparse matrix
+                }
                 
-                my $malt_allele_count = max($alt_allele_count, $tot_count - $alt_allele_count);
-                my $malt_allele_freq = sprintf("%.3f", $malt_allele_count / $tot_count);
+                my $alt_allele_freq = sprintf("%.3f", max($alt_allele_count / $tot_count, $SMALL_NONZERO_VALUE));
                 
                 ## output matrix elements
 
-                print $ofh_malt join("\t", $snp_counter, $cell_counter, $malt_allele_count) . "\n";
+                print $ofh_alt join("\t", $snp_counter, $cell_counter, $alt_allele_count) . "\n";
                 print $ofh_tot join("\t", $snp_counter, $cell_counter, $tot_count) . "\n";
-                print $ofh_freq join("\t", $snp_counter, $cell_counter, $malt_allele_freq) . "\n";
+                print $ofh_freq join("\t", $snp_counter, $cell_counter, $alt_allele_freq) . "\n";
                 
             }
         }
     }
     
-    close $ofh_malt;
+    close $ofh_alt;
     close $ofh_tot;
     close $ofh_freq;
     
@@ -267,6 +271,10 @@ sub filter_variants {
 
         # count number of het sites
         my $num_het_sites = 0;
+        
+        my $num_ref_only = 0;
+        my $num_alt_only = 0;
+        
         foreach my $cell (@cells) {
             my $alt_allele_count = $data_href->{$snp}->{$cell}->{ALT};
             my $tot_count = $data_href->{$snp}->{$cell}->{TOT};
@@ -276,8 +284,19 @@ sub filter_variants {
             if ($ratio >= $low_range_het_snp_ratio && $ratio <= $high_range_het_snp_ratio) {
                 $num_het_sites++;
             }
+            elsif ($ratio < $low_range_het_snp_ratio) {
+                $num_ref_only++;
+            }
+            elsif ($ratio > $high_range_het_snp_ratio) {
+                $num_alt_only++;
+            }
+        }
+        
+        if ($num_ref_only > 0 && $num_alt_only > 0) { 
+            $num_het_sites += min($num_ref_only, $num_alt_only); # err on the conservative side.
         }
 
+        
         if ($num_het_sites < $min_het_cells_per_snp) {
             $snps_to_purge{$snp} = 1;
             next;

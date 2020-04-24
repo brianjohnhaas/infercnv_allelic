@@ -131,25 +131,8 @@ chr_maxpos = datamelt %>% group_by(chr) %>% summarize(maxpos = max(pos))
 chr_maxpos$minpos = 1
 
 
-
-#cell_groupings = split(cell_annots, cell_annots$celltype)
-
-#for (cell_grouping in cell_groupings) {
-
-#cells_want = cell_groupings[cell_grouping][[1]]$cell
-
-#    datamelt = datamelt[,colnames(datamelt) %in% cells_want]
-
-
 datamelt = datamelt %>% filter(AF > 0)  ## if AF==0, then means we have no coverage.
 
-
-#    datamelt = datamelt %>% mutate(mBAF = pmax(AF, 1-AF))
-
-## further restrict to het snps based on allele frequency datamelt
-#het_snps = datamelt %>% filter(AF > 0.25 & AF < 0.75) %>% group_by(chrpos) %>% tally() %>% filter(n>=3) %>% pull(chrpos)
-
-#datamelt = datamelt %>% filter(chrpos %in% het_snps)
 
 
 normal_datamelt = datamelt %>% filter(cell %in% normal_cells)
