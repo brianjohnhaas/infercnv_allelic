@@ -7,6 +7,13 @@ parser$add_argument("--gene_coords", help="input gene coords file", required=TRU
 parser$add_argument("--allelic_fraction_matrix", help="allelic fraction matrix", required=TRUE, nargs=1)
 parser$add_argument("--output_image_filename", help="output image file name", required=TRUE, nargs=1)
 parser$add_argument("--cell_annots_file", help="cell type annotation file", required=TRUE, nargs=1)
+parser$add_argument("--cluster_cells", help="cluster cells", required=FALSE, default=FALSE, action='store_true')
+parser$add_argument("--smooth", help="smooth by chr", required=FALSE, default=FALSE, action='store_true')
+parser$add_argument("--smK", help="smooth by k window size", required=FALSE, type='integer', default=31, nargs=1)
+parser$add_argument("--center", help="center by cell", required=FALSE, default=FALSE, action='store_true')
+parser$add_argument("--sample_size", help="sample counts of normal and malignant cells", required=FALSE, default=-1)
+parser$add_argument("--colorscheme", help="color scheme. options: BlueRed, BlueYellowRed  (default: BlueRed)", required=FALSE, default="BlueRed")
+
 
 args = parser$parse_args()
 
@@ -14,6 +21,13 @@ gene_coords_file = args$gene_coords
 allelic_fraction_matrix_file = args$allelic_fraction_matrix
 output_image_filename = args$output_image_filename
 cell_annots_file = args$cell_annots_file
+cluster_flag = args$cluster_cells
+smooth_flag = args$smooth
+smK = args$smK
+center_flag = args$center
+sample_size = args$sample_size
+colorscheme = args$colorscheme
+
 
 library(tidyverse)
 library(cowplot)
@@ -25,7 +39,7 @@ library(reshape2)
 
 dotsize=0.3
 
-gcinfo(TRUE)
+#gcinfo(TRUE)
 
 ## parsing annotation coordinates
 gencode_gene_pos = read.table(gene_coords_file, header=F, row.names=NULL, stringsAsFactors=F)
@@ -52,19 +66,15 @@ malignant_cells_idx = grep("malignant", cell_annots$celltype, value=F)
 normal_cells = cell_annots$cell[-malignant_cells_idx]
 malignant_cells = cell_annots$cell[malignant_cells_idx]
 
-
-
-## cluster cells according to expr pattern:
-#gene_expr_matrix = data %>% select(genename, cell, exp.norm.smoothed) %>% spread(key=cell, value=exp.norm.smoothed)
-
-#rownames(gene_expr_matrix) = gene_expr_matrix$genename
-#gene_expr_matrix = gene_expr_matrix[,-1]
-#h = hclust(dist(t(gene_expr_matrix)))
-#ordered_cells = colnames(gene_expr_matrix)[h$order]
-
-#data$cell = ordered(data$cell, levels=ordered_cells)
-
-## set up base plot
+if (sample_size > 0) {
+    message("-sampling ", sample_size, " cells from normal and malignant sets")
+    if (length(normal_cells) < sample_size) {
+        normal_cells = sample(x=normal_cells, size=sample_size, replace=FALSE)
+    }
+    if (length(malignant_cells) < sample_size) {
+        malignant_cells = sample(x=malignant_cells, size=sample_size, replace=FALSE)
+    }
+}
 
 
 ## ####################################
@@ -84,11 +94,17 @@ cells_w_alt_allele = rowSums(allele_matrix != 0 & allele_matrix > 0.5)
 
 allele_matrix = allele_matrix[(cells_w_ref_allele >= min.cells & cells_w_alt_allele >= min.cells), ]
 
+if (sample_size > 0) {
+    cells_want = union(normal_cells, malignant_cells)
+    allele_matrix = allele_matrix[, colnames(allele_matrix) %in% cells_want]
+}
+
 num_snps_all = nrow(allele_matrix)
 message("-num het snps used: ", num_snps_all)
 
-write.table(allele_matrix, file=paste0(allelic_fraction_matrix_file, num_snps_all, ".af.matrix"), quote=F, sep="\t")
-
+if (sample_size > 0) {
+    write.table(allele_matrix, file=paste0(allelic_fraction_matrix_file, num_snps_all, ".af.matrix"), quote=F, sep="\t")
+}
 
 ## reset the alt allele fraction to the cell-population minor allele frequency
 
@@ -107,11 +123,20 @@ mAF_allele_matrix = apply(allele_matrix, 1, function(x) {
 allele_matrix = t(mAF_allele_matrix)
 
 
+if (cluster_flag) {
+    ## define cell ordering.
+    message("clustering cells")
+    h = hclust(dist(t(allele_matrix)))
+    ordered_cells = colnames(allele_matrix)[h$order]
+}
 
 message("melting matrix.")
 datamelt = melt(as.matrix(allele_matrix))
 colnames(datamelt) = c('chrpos', 'cell', 'AF')
 
+if (cluster_flag) {
+    datamelt$cell = ordered(datamelt$cell, levels=ordered_cells)
+}
 
 ## include chr and postion separately.
 datamelt = datamelt %>% separate(chrpos, "::", into=c('seqnames', 'pos'), remove=FALSE)
@@ -133,28 +158,84 @@ chr_maxpos$minpos = 1
 
 datamelt = datamelt %>% filter(AF > 0)  ## if AF==0, then means we have no coverage.
 
+datamelt = datamelt %>% mutate(cellchr = paste(cell, seqnames, sep=":"))
 
 
-normal_datamelt = datamelt %>% filter(cell %in% normal_cells)
+if (smooth_flag) {
+    splitdata = split(datamelt, datamelt$cellchr)
+
+    ## smooth AFs across chromosomes.
+    message("-smoothing")
+    smoother = function(df) {
+        df = df %>% arrange(pos)
+        df$AF = caTools::runmean(df$AF, k=smK, align="center")
+        return(df)
+    }
+
+    datamelt = do.call(rbind, lapply(splitdata, smoother))
+}
+
+if (center_flag) {
+
+    ## center by cell:
+    splitdata = split(datamelt, datamelt$cell)
+
+    ## smooth AFs across chromosomes.
+    message("-centering by cell")
+    centerbycell = function(df) {
+
+        df$AF = df$AF - mean(df$AF)
+
+        return(df)
+    }
+
+    datamelt = do.call(rbind, lapply(splitdata, centerbycell))
+}
 
 
-normal_snps_plot = ggplot(data=normal_datamelt) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
-    theme_bw() +
-    theme(axis.ticks.x = element_blank(),
-          axis.text.x = element_blank(),
-          axis.title.x = element_blank(),
-          panel.grid.major.x = element_blank(),
-          panel.grid.minor.x = element_blank(),
-          panel.grid.major.y = element_blank(),
-          panel.grid.minor.y = element_blank()
+midpt = mean(datamelt$AF)
+
+## normal cell plot
+
+normal_snps_plot = NULL
+num_normal_cells = length(normal_cells)
+
+if (num_normal_cells > 0) {
+
+    message("-making normal plot")
+
+    normal_datamelt = datamelt %>% filter(cell %in% normal_cells)
+
+
+    normal_snps_plot = ggplot(data=normal_datamelt) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
+        theme_bw() +
+        theme(axis.ticks.x = element_blank(),
+              axis.text.x = element_blank(),
+              axis.title.x = element_blank(),
+              panel.grid.major.x = element_blank(),
+              panel.grid.minor.x = element_blank(),
+              panel.grid.major.y = element_blank(),
+              panel.grid.minor.y = element_blank()
               ) +
 
-    geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
-    geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
+        geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
+        geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
 
-    geom_point(aes(x=pos, y=cell, color=AF), alpha=0.6, size=dotsize) + scale_radius() +
-    scale_color_gradient(low="blue", high="red")
+        geom_point(aes(x=pos, y=cell, color=AF), alpha=0.6, size=dotsize) + scale_radius()
 
+
+    if (colorscheme == "BlueRed") {
+        normal_snps_plot = normal_snps_plot + scale_color_gradient(low="blue", high="red")
+    } else {
+        normal_snps_plot = normal_snps_plot + scale_color_gradient2(low="blue", mid='yellow', high="red", midpoint=midpt)
+    }
+}
+
+## malignant cell plot
+
+message("-making malignant plot")
+
+num_malignant_cells = length(malignant_cells)
 
 malignant_datamelt = datamelt %>% filter(cell %in% malignant_cells)
 
@@ -172,21 +253,28 @@ malignant_snps_plot = ggplot(data=malignant_datamelt) + facet_grid (~chr, scales
     geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
     geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
 
-    geom_point(aes(x=pos, y=cell, color=AF), alpha=0.6, size=dotsize) + scale_radius() +
-    scale_color_gradient(low="blue", high="red")
+    geom_point(aes(x=pos, y=cell, color=AF), alpha=0.6, size=dotsize) + scale_radius()
+
+if (colorscheme == "BlueRed") {
+    malignant_snps_plot = malignant_snps_plot + scale_color_gradient(low="blue", high="red")
+} else {
+    malignant_snps_plot = malignant_snps_plot + scale_color_gradient2(low="blue", mid='yellow', high="red", midpoint=midpt)
+}
 
 
 message("-writing image")
 
-num_normal_cells = length(normal_cells)
-num_malignant_cells = length(malignant_cells)
+if (num_normal_cells > 0) {
 
-pg = plot_grid(normal_snps_plot, malignant_snps_plot, ncol=1, align='v', rel_heights=c(num_normal_cells, num_malignant_cells))
+    ratio_normal_cells = max(0.25, num_normal_cells/(num_normal_cells + num_malignant_cells))
 
+    pg = plot_grid(normal_snps_plot, malignant_snps_plot, ncol=1, align='v', rel_heights=c(ratio_normal_cells, 1-ratio_normal_cells))
 
-ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
+    ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
 
-
+} else {
+    ggsave (output_image_filename, malignant_snps_plot, width = 13.33, height = 7.5, units = 'in', dpi = 300)
+}
 
 
 
