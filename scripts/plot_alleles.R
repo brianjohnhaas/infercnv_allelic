@@ -5,7 +5,7 @@ parser = ArgumentParser()
 
 parser$add_argument("--gene_coords", help="input gene coords file", required=TRUE, nargs=1)
 parser$add_argument("--allelic_fraction_matrix", help="allelic fraction matrix", required=TRUE, nargs=1)
-parser$add_argument("--output_image_filename", help="output image file name", required=TRUE, nargs=1)
+parser$add_argument("--output_prefix", help="output file prefix", required=TRUE, nargs=1)
 parser$add_argument("--cell_annots_file", help="cell type annotation file", required=TRUE, nargs=1)
 parser$add_argument("--cluster_cells", help="cluster cells", required=FALSE, default=FALSE, action='store_true')
 parser$add_argument("--smooth", help="smooth by chr", required=FALSE, default=FALSE, action='store_true')
@@ -14,13 +14,14 @@ parser$add_argument("--trend_smK", help="smooth k for trend lines", required=FAL
 parser$add_argument("--center", help="center by cell", required=FALSE, default=FALSE, action='store_true')
 parser$add_argument("--sample_size", help="sample counts of normal and malignant cells", required=FALSE, default=-1)
 parser$add_argument("--colorscheme", help="color scheme. options: BlueRed, BlueYellowRed  (default: BlueRed)", required=FALSE, default="BlueRed")
+parser$add_argument("--incl_each_chr_sep", help="include each chromosome plot separately", required=FALSE, default=FALSE, action='store_true')
 
 
 args = parser$parse_args()
 
 gene_coords_file = args$gene_coords
 allelic_fraction_matrix_file = args$allelic_fraction_matrix
-output_image_filename = args$output_image_filename
+output_prefix = args$output_prefix
 cell_annots_file = args$cell_annots_file
 cluster_flag = args$cluster_cells
 smooth_flag = args$smooth
@@ -29,7 +30,7 @@ trend_smK = args$trend_smK
 center_flag = args$center
 sample_size = args$sample_size
 colorscheme = args$colorscheme
-
+each_chr_sep_flag = args$incl_each_chr_sep
 
 CELL_POINT_ALPHA = 0.6
 
@@ -111,9 +112,9 @@ if (sample_size > 0) {
     write.table(allele_matrix, file=paste0(allelic_fraction_matrix_file, num_snps_all, ".af.matrix"), quote=F, sep="\t")
 }
 
-## reset the alt allele fraction to the cell-population minor allele frequency
+## reset the alt allele fraction to the cell-population minor allele
 
-message("-setting alt allele fraction to the cell-population minor allele fraction")
+message("-setting alt allele fraction to the tumor cell-population minor allele")
 mAF_allele_matrix = apply(allele_matrix, 1, function(x) {
     nonzero_val_idx = which(x>0)
     nonzero_vals = x[nonzero_val_idx]
@@ -200,25 +201,61 @@ if (center_flag) {
 
 midpt = mean(datamelt$AF)
 
-## normal cell plot
-
-normal_snps_plot = NULL
-num_normal_cells = length(normal_cells)
-
-datamelt$sample_type = "tumor"
 
 
+make_plots = function(dataToPlot, output_image_filename) {
 
-if (num_normal_cells > 0) {
+    ## normal cell plot
 
-    datamelt$sample_type[ datamelt$cell %in% normal_cells ] = "normal"
+    normal_snps_plot = NULL
+    num_normal_cells = length(normal_cells)
 
-    message("-making normal plot")
-
-    normal_datamelt = datamelt %>% filter(cell %in% normal_cells)
+    dataToPlot$sample_type = "tumor"
 
 
-    normal_snps_plot = ggplot(data=normal_datamelt) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
+
+    if (num_normal_cells > 0) {
+
+        dataToPlot$sample_type[ dataToPlot$cell %in% normal_cells ] = "normal"
+
+        message("-making normal plot")
+
+        normal_dataToPlot = dataToPlot %>% filter(cell %in% normal_cells)
+
+
+        normal_snps_plot = ggplot(data=normal_dataToPlot) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
+            theme_bw() +
+            theme(axis.ticks.x = element_blank(),
+                  axis.text.x = element_blank(),
+                  axis.title.x = element_blank(),
+                  panel.grid.major.x = element_blank(),
+                  panel.grid.minor.x = element_blank(),
+                  panel.grid.major.y = element_blank(),
+                  panel.grid.minor.y = element_blank()
+                  ) +
+
+            geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
+            geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
+
+            geom_point(aes(x=pos, y=cell, color=AF), alpha=CELL_POINT_ALPHA, size=dotsize) + scale_radius()
+
+
+        if (colorscheme == "BlueRed") {
+            normal_snps_plot = normal_snps_plot + scale_color_gradient(low="blue", high="red")
+        } else {
+            normal_snps_plot = normal_snps_plot + scale_color_gradient2(low="blue", mid='yellow', high="red", midpoint=midpt)
+        }
+    }
+
+    ## malignant cell plot
+
+    message("-making malignant plot")
+
+    num_malignant_cells = length(malignant_cells)
+
+    malignant_dataToPlot = dataToPlot %>% filter(cell %in% malignant_cells)
+
+    malignant_snps_plot = ggplot(data=malignant_dataToPlot) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
         theme_bw() +
         theme(axis.ticks.x = element_blank(),
               axis.text.x = element_blank(),
@@ -234,102 +271,87 @@ if (num_normal_cells > 0) {
 
         geom_point(aes(x=pos, y=cell, color=AF), alpha=CELL_POINT_ALPHA, size=dotsize) + scale_radius()
 
-
     if (colorscheme == "BlueRed") {
-        normal_snps_plot = normal_snps_plot + scale_color_gradient(low="blue", high="red")
+        malignant_snps_plot = malignant_snps_plot + scale_color_gradient(low="blue", high="red")
     } else {
-        normal_snps_plot = normal_snps_plot + scale_color_gradient2(low="blue", mid='yellow', high="red", midpoint=midpt)
+        malignant_snps_plot = malignant_snps_plot + scale_color_gradient2(low="blue", mid='yellow', high="red", midpoint=midpt)
     }
-}
-
-## malignant cell plot
-
-message("-making malignant plot")
-
-num_malignant_cells = length(malignant_cells)
-
-malignant_datamelt = datamelt %>% filter(cell %in% malignant_cells)
-
-malignant_snps_plot = ggplot(data=malignant_datamelt) + facet_grid (~chr, scales = 'free_x', space = 'fixed') +
-    theme_bw() +
-    theme(axis.ticks.x = element_blank(),
-          axis.text.x = element_blank(),
-          axis.title.x = element_blank(),
-          panel.grid.major.x = element_blank(),
-          panel.grid.minor.x = element_blank(),
-          panel.grid.major.y = element_blank(),
-          panel.grid.minor.y = element_blank()
-          ) +
-
-    geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
-    geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
-
-    geom_point(aes(x=pos, y=cell, color=AF), alpha=CELL_POINT_ALPHA, size=dotsize) + scale_radius()
-
-if (colorscheme == "BlueRed") {
-    malignant_snps_plot = malignant_snps_plot + scale_color_gradient(low="blue", high="red")
-} else {
-    malignant_snps_plot = malignant_snps_plot + scale_color_gradient2(low="blue", mid='yellow', high="red", midpoint=midpt)
-}
 
 
-message("-making allele freq plot")
+    message("-making allele freq plot")
 
 
-allele_freq_means = datamelt %>%
-    group_by(chrpos,sample_type) %>%
-    mutate(grp_pos_mean_AF = mean(AF)) %>% select(chrpos, chr, pos, sample_type, grp_pos_mean_AF) %>% unique()
+    allele_freq_means = dataToPlot %>%
+        group_by(chrpos,sample_type) %>%
+        mutate(grp_pos_mean_AF = mean(AF)) %>% select(chrpos, chr, pos, sample_type, grp_pos_mean_AF) %>% unique()
 
 
 
-## smooth mean AFs across chromosomes for each sample type.
-message("-smoothing sample means for trend lines")
+    ## smooth mean AFs across chromosomes for each sample type.
+    message("-smoothing sample means for trend lines")
 
-allele_freq_means = allele_freq_means %>% mutate(sampleTypeChr = paste(sample_type, chr, sep=":"))
-splitdata = split(allele_freq_means, allele_freq_means$sampleTypeChr)
+    allele_freq_means = allele_freq_means %>% mutate(sampleTypeChr = paste(sample_type, chr, sep=":"))
+    splitdata = split(allele_freq_means, allele_freq_means$sampleTypeChr)
 
-smoother = function(df) {
-    df = df %>% arrange(pos)
-    df$grp_pos_mean_AF_sm = caTools::runmean(df$grp_pos_mean_AF, k=trend_smK, align="center")
-    return(df)
-}
+    smoother = function(df) {
+        df = df %>% arrange(pos)
+        df$grp_pos_mean_AF_sm = caTools::runmean(df$grp_pos_mean_AF, k=trend_smK, align="center")
+        return(df)
+    }
 
-allele_freq_means = do.call(rbind, lapply(splitdata, smoother))
+    allele_freq_means = do.call(rbind, lapply(splitdata, smoother))
 
-allele_freq_plot = allele_freq_means %>%
-    ggplot(aes(x=pos, y=grp_pos_mean_AF)) +
+    allele_freq_plot = allele_freq_means %>%
+        ggplot(aes(x=pos, y=grp_pos_mean_AF)) +
         facet_grid (~chr, scales = 'free_x', space = 'fixed') +
         theme_bw() +
         theme(axis.ticks.x = element_blank(),
-          axis.text.x = element_blank(),
-          axis.title.x = element_blank(),
-          panel.grid.major.x = element_blank(),
-          panel.grid.minor.x = element_blank(),
-          panel.grid.major.y = element_blank(),
-          panel.grid.minor.y = element_blank()
-          ) +
+              axis.text.x = element_blank(),
+              axis.title.x = element_blank(),
+              panel.grid.major.x = element_blank(),
+              panel.grid.minor.x = element_blank(),
+              panel.grid.major.y = element_blank(),
+              panel.grid.minor.y = element_blank()
+              ) +
         geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
         geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
         geom_point(aes(color=sample_type), alpha=0.2, size=0.2)
 
 
-allele_freq_plot_w_trendlines = allele_freq_plot +
-    geom_line(data=allele_freq_means,
-              aes(x=pos, y=grp_pos_mean_AF_sm, color=sample_type), size=0.5, alpha=1)
+    allele_freq_plot_w_trendlines = allele_freq_plot +
+        geom_line(data=allele_freq_means,
+                  aes(x=pos, y=grp_pos_mean_AF_sm, color=sample_type), size=0.5, alpha=1)
 
-message("-writing heatmap image")
+    message("-writing heatmap image")
 
-if (num_normal_cells > 0) {
+    if (num_normal_cells > 0) {
 
-    ratio_normal_cells = max(0.25, num_normal_cells/(num_normal_cells + num_malignant_cells))
+        ratio_normal_cells = max(0.25, num_normal_cells/(num_normal_cells + num_malignant_cells))
 
-    pg = plot_grid(normal_snps_plot, allele_freq_plot_w_trendlines, malignant_snps_plot, ncol=1, align='v', rel_heights=c(ratio_normal_cells, 0.25, 1-ratio_normal_cells))
+        pg = plot_grid(normal_snps_plot, allele_freq_plot_w_trendlines, malignant_snps_plot, ncol=1, align='v', rel_heights=c(ratio_normal_cells, 0.25, 1-ratio_normal_cells))
 
-    ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
+        ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
 
-} else {
-    ggsave (output_image_filename, malignant_snps_plot, width = 13.33, height = 7.5, units = 'in', dpi = 300)
+    } else {
+        ggsave (output_image_filename, malignant_snps_plot, width = 13.33, height = 7.5, units = 'in', dpi = 300)
+    }
+
 }
 
 
+#output_image_filename = paste0(output_prefix, ".genome.png")
+#make_plots(datamelt, output_image_filename)
+
+if (each_chr_sep_flag) {
+    chrs = datamelt %>% select(chr) %>% unique() %>% pull('chr')
+    for (chr_select in chrs) {
+        chrdata = datamelt %>% filter(chr==chr_select)
+        chr_image_filename = paste0(output_prefix, ".chr", chr_select, ".png")
+        message("-making image for chr: ", chr_select)
+        make_plots(chrdata, chr_image_filename)
+    }
+
+}
+
+message("done")
 
