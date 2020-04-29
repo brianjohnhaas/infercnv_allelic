@@ -200,7 +200,13 @@ midpt = mean(datamelt$AF)
 normal_snps_plot = NULL
 num_normal_cells = length(normal_cells)
 
+datamelt$sample_type = "tumor"
+
+
+
 if (num_normal_cells > 0) {
+
+    datamelt$sample_type[ datamelt$cell %in% normal_cells ] = "normal"
 
     message("-making normal plot")
 
@@ -262,13 +268,35 @@ if (colorscheme == "BlueRed") {
 }
 
 
-message("-writing image")
+message("-making allele freq plot")
+
+allele_freq_plot = datamelt %>%
+    group_by(chrpos,sample_type) %>%
+    mutate(grp_pos_mean_AF = mean(AF)) %>%
+    ggplot(aes(x=pos, y=grp_pos_mean_AF)) +
+        facet_grid (~chr, scales = 'free_x', space = 'fixed') +
+        theme_bw() +
+        theme(axis.ticks.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.title.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank()
+          ) +
+        geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
+        geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
+        geom_point(aes(color=sample_type), alpha=0.4, size=0.1)
+
+
+
+message("-writing heatmap image")
 
 if (num_normal_cells > 0) {
 
     ratio_normal_cells = max(0.25, num_normal_cells/(num_normal_cells + num_malignant_cells))
 
-    pg = plot_grid(normal_snps_plot, malignant_snps_plot, ncol=1, align='v', rel_heights=c(ratio_normal_cells, 1-ratio_normal_cells))
+    pg = plot_grid(normal_snps_plot, allele_freq_plot, malignant_snps_plot, ncol=1, align='v', rel_heights=c(ratio_normal_cells, 0.25, 1-ratio_normal_cells))
 
     ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
 
