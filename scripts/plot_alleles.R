@@ -10,6 +10,7 @@ parser$add_argument("--cell_annots_file", help="cell type annotation file", requ
 parser$add_argument("--cluster_cells", help="cluster cells", required=FALSE, default=FALSE, action='store_true')
 parser$add_argument("--smooth", help="smooth by chr", required=FALSE, default=FALSE, action='store_true')
 parser$add_argument("--smK", help="smooth by k window size", required=FALSE, type='integer', default=31, nargs=1)
+parser$add_argument("--trend_smK", help="smooth k for trend lines", required=FALSE, type='integer', default=31, nargs=1)
 parser$add_argument("--center", help="center by cell", required=FALSE, default=FALSE, action='store_true')
 parser$add_argument("--sample_size", help="sample counts of normal and malignant cells", required=FALSE, default=-1)
 parser$add_argument("--colorscheme", help="color scheme. options: BlueRed, BlueYellowRed  (default: BlueRed)", required=FALSE, default="BlueRed")
@@ -24,9 +25,13 @@ cell_annots_file = args$cell_annots_file
 cluster_flag = args$cluster_cells
 smooth_flag = args$smooth
 smK = args$smK
+trend_smK = args$trend_smK
 center_flag = args$center
 sample_size = args$sample_size
 colorscheme = args$colorscheme
+
+
+CELL_POINT_ALPHA = 0.6
 
 
 library(tidyverse)
@@ -227,7 +232,7 @@ if (num_normal_cells > 0) {
         geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
         geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
 
-        geom_point(aes(x=pos, y=cell, color=AF), alpha=0.6, size=dotsize) + scale_radius()
+        geom_point(aes(x=pos, y=cell, color=AF), alpha=CELL_POINT_ALPHA, size=dotsize) + scale_radius()
 
 
     if (colorscheme == "BlueRed") {
@@ -259,7 +264,7 @@ malignant_snps_plot = ggplot(data=malignant_datamelt) + facet_grid (~chr, scales
     geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
     geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
 
-    geom_point(aes(x=pos, y=cell, color=AF), alpha=0.6, size=dotsize) + scale_radius()
+    geom_point(aes(x=pos, y=cell, color=AF), alpha=CELL_POINT_ALPHA, size=dotsize) + scale_radius()
 
 if (colorscheme == "BlueRed") {
     malignant_snps_plot = malignant_snps_plot + scale_color_gradient(low="blue", high="red")
@@ -270,9 +275,28 @@ if (colorscheme == "BlueRed") {
 
 message("-making allele freq plot")
 
-allele_freq_plot = datamelt %>%
+
+allele_freq_means = datamelt %>%
     group_by(chrpos,sample_type) %>%
-    mutate(grp_pos_mean_AF = mean(AF)) %>%
+    mutate(grp_pos_mean_AF = mean(AF)) %>% select(chrpos, chr, pos, sample_type, grp_pos_mean_AF) %>% unique()
+
+
+
+## smooth mean AFs across chromosomes for each sample type.
+message("-smoothing sample means for trend lines")
+
+allele_freq_means = allele_freq_means %>% mutate(sampleTypeChr = paste(sample_type, chr, sep=":"))
+splitdata = split(allele_freq_means, allele_freq_means$sampleTypeChr)
+
+smoother = function(df) {
+    df = df %>% arrange(pos)
+    df$grp_pos_mean_AF_sm = caTools::runmean(df$grp_pos_mean_AF, k=trend_smK, align="center")
+    return(df)
+}
+
+allele_freq_means = do.call(rbind, lapply(splitdata, smoother))
+
+allele_freq_plot = allele_freq_means %>%
     ggplot(aes(x=pos, y=grp_pos_mean_AF)) +
         facet_grid (~chr, scales = 'free_x', space = 'fixed') +
         theme_bw() +
@@ -286,9 +310,12 @@ allele_freq_plot = datamelt %>%
           ) +
         geom_vline(data=chr_maxpos, aes(xintercept=minpos), color=NA) +
         geom_vline(data=chr_maxpos, aes(xintercept=maxpos), color=NA) +
-        geom_point(aes(color=sample_type), alpha=0.4, size=0.1)
+        geom_point(aes(color=sample_type), alpha=0.2, size=0.2)
 
 
+allele_freq_plot_w_trendlines = allele_freq_plot +
+    geom_line(data=allele_freq_means,
+              aes(x=pos, y=grp_pos_mean_AF_sm, color=sample_type), size=0.5, alpha=1)
 
 message("-writing heatmap image")
 
@@ -296,7 +323,7 @@ if (num_normal_cells > 0) {
 
     ratio_normal_cells = max(0.25, num_normal_cells/(num_normal_cells + num_malignant_cells))
 
-    pg = plot_grid(normal_snps_plot, allele_freq_plot, malignant_snps_plot, ncol=1, align='v', rel_heights=c(ratio_normal_cells, 0.25, 1-ratio_normal_cells))
+    pg = plot_grid(normal_snps_plot, allele_freq_plot_w_trendlines, malignant_snps_plot, ncol=1, align='v', rel_heights=c(ratio_normal_cells, 0.25, 1-ratio_normal_cells))
 
     ggsave (output_image_filename, pg, width = 13.33, height = 7.5, units = 'in', dpi = 300)
 
