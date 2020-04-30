@@ -82,6 +82,8 @@ if (sample_size > 0) {
     }
 }
 
+num_normal_cells = length(normal_cells)
+
 
 ## ####################################
 ## SNPs
@@ -114,11 +116,22 @@ if (sample_size > 0) {
 
 ## reset the alt allele fraction to the cell-population minor allele
 
+malignant_cell_idx = which(colnames(allele_matrix) %in% malignant_cells)
+
 message("-setting alt allele fraction to the tumor cell-population minor allele")
 mAF_allele_matrix = apply(allele_matrix, 1, function(x) {
     nonzero_val_idx = which(x>0)
     nonzero_vals = x[nonzero_val_idx]
+
     frac_high = sum(nonzero_vals>0.5)/length(nonzero_vals)
+
+    ## focus allele selection based on the tumor cells only.
+    tumor_vals = x[malignant_cell_idx]
+    tumor_nonzero_vals = tumor_vals[tumor_vals>0]
+    if (length(tumor_nonzero_vals) > 0) {
+        frac_high = sum(tumor_nonzero_vals>0.5)/length(tumor_nonzero_vals)
+    }
+
     if ( frac_high > 0.5) {
         x[x==1] = 0.999
         x[nonzero_val_idx ] = 1 - x[nonzero_val_idx]
@@ -202,21 +215,27 @@ if (center_flag) {
 midpt = mean(datamelt$AF)
 
 
+## annotate cell types
 
-make_plots = function(dataToPlot, output_image_filename) {
+datamelt$sample_type = "tumor"
+if (num_normal_cells > 0) {
+    datamelt$sample_type[ datamelt$cell %in% normal_cells ] = "normal"
+}
+
+
+
+make_plots = function(dataToPlot, chr_maxpos, output_prefix_name) {
+
+    ## generate output tsv
+    output_tsv = paste0(output_prefix_name, ".cell_data.tsv")
+    message("-writing data table: ", output_tsv)
+    write.table(dataToPlot, file=output_tsv, quote=F, sep="\t", row.names=F)
 
     ## normal cell plot
 
     normal_snps_plot = NULL
-    num_normal_cells = length(normal_cells)
-
-    dataToPlot$sample_type = "tumor"
-
-
 
     if (num_normal_cells > 0) {
-
-        dataToPlot$sample_type[ dataToPlot$cell %in% normal_cells ] = "normal"
 
         message("-making normal plot")
 
@@ -322,7 +341,15 @@ make_plots = function(dataToPlot, output_image_filename) {
         geom_line(data=allele_freq_means,
                   aes(x=pos, y=grp_pos_mean_AF_sm, color=sample_type), size=0.5, alpha=1)
 
+
+    AF_freq_means_tsv = paste0(output_prefix_name, ".AF_freq_means.tsv")
+    message("-writing tsv: ", AF_freq_means_tsv)
+    write.table(allele_freq_means, file=AF_freq_means_tsv, quote=F, sep="\t", row.names=F)
+
+
     message("-writing heatmap image")
+
+    output_image_filename = paste0(output_prefix_name, ".png")
 
     if (num_normal_cells > 0) {
 
@@ -339,16 +366,22 @@ make_plots = function(dataToPlot, output_image_filename) {
 }
 
 
-#output_image_filename = paste0(output_prefix, ".genome.png")
-#make_plots(datamelt, output_image_filename)
+message("-** generating outputs. **")
+
+make_plots(datamelt, chr_maxpos, paste0(output_prefix, ".genome"))
 
 if (each_chr_sep_flag) {
+    message("-** processing each chr separately.")
+
     chrs = datamelt %>% select(chr) %>% unique() %>% pull('chr')
     for (chr_select in chrs) {
         chrdata = datamelt %>% filter(chr==chr_select)
-        chr_image_filename = paste0(output_prefix, ".chr", chr_select, ".png")
-        message("-making image for chr: ", chr_select)
-        make_plots(chrdata, chr_image_filename)
+        chr_output_prefix = paste0(output_prefix, ".chr", chr_select)
+        message("-processing chr: ", chr_select)
+
+        chronly_maxpos = chr_maxpos %>% filter(chr==chr_select)
+
+        make_plots(chrdata, chronly_maxpos, chr_output_prefix)
     }
 
 }
