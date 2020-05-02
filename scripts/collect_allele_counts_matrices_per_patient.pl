@@ -62,15 +62,15 @@ main: {
             my $cell_type = $cell_types_href->{$cell_name};
             print $patient_cell_types_ofh join("\t", $cell_name, $cell_type) . "\n";
             my $allelic_file = $cell_to_allelic_file{$cell_name} or die "Error, no allelic file for cell: $cell_name of patient $patient";
-            print $patient_allele_files_ofh $allelic_file . "\n";
+            print $patient_allele_files_ofh join("\t", $cell_name, $allelic_file) . "\n";
         }
-
+        
         close $patient_cell_types_ofh;
         close $patient_allele_files_ofh;
         
         
     
-        my $cmd = "$FindBin::Bin/util/make_allelic_count_matrices.pl --allelic_counts_file_list_file $patient.allelic_files --output_prefix $patient ";
+        my $cmd = "$FindBin::Bin/util/make_allelic_count_matrices.pl --cell_types $patient.cell_types --allelic_counts_file_list_file $patient.allelic_files --output_prefix $patient ";
         &process_cmd($cmd);
         
         $cmd = "$FindBin::Bin/util/sparse_to_regular_matrix.R --alt_ratios $patient.alt_ratios.matrix --cell_names $patient.cells.names --chrpos_names $patient.chrpos.names --output $patient.AF.matrix";

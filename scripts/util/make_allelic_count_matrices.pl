@@ -10,11 +10,12 @@ use Getopt::Long qw(:config posix_default no_ignore_case bundling pass_through);
 
 my $help_flag;
 
+my $cell_types_file;
 my $allelic_counts_file_list_file;
 my $output_prefix;
 
 
-my $min_variant_coverage = 3;  # initial scanning of counts files
+my $min_variant_coverage = 1;  # initial scanning of counts files
 
 my $min_cells_with_coverage = 3;  # filtering of variants
 my $min_het_cells_per_snp = 1;
@@ -32,6 +33,8 @@ my $usage = <<__EOUSAGE__;
 ##################################################################################
 #
 #  * required:
+#
+#  --cell_types <string>                      file containing cell types format: "cell_name (tab) cell type"
 #
 #  --allelic_counts_file_list_file <string>   file containing the list of allelic counts files, one file per cell
 #
@@ -76,6 +79,7 @@ __EOUSAGE__
 
 &GetOptions ( 'h' => \$help_flag,
               
+              'cell_types=s' => \$cell_types_file,
               'allelic_counts_file_list_file=s' => \$allelic_counts_file_list_file,
               
               'min_variant_coverage=i' => \$min_variant_coverage,
@@ -103,30 +107,46 @@ unless ($allelic_counts_file_list_file) {
 
 main: {
 
-    my %data;
-    my %cell_names;
-
-    my $counter = 0;
-    
+    my %cellname_to_celltypes;
+    my %unique_cell_types;
     print STDERR "## -parsing files.\n";
-    open(my $fh, $allelic_counts_file_list_file) or die "Error, cannot open file: $allelic_counts_file_list_file";
-    while(<$fh>) {
-        chomp;
-        my $tsv_file = $_;
-        $counter++;
-        print STDERR "[$counter] $tsv_file ";
-    
-        my $cell_name = basename($tsv_file);
-        my @pts = split(/_qc./, $cell_name);
-        $cell_name = $pts[0] or die "Error, no cell name from $tsv_file";
-        
-        $cell_names{$cell_name} = 1;
-    
-        &process_tsv_file($tsv_file, $cell_name, \%data, $min_variant_coverage);
-        
+    print STDERR "-parsing $cell_types_file\n";
+    {
+        open(my $fh, $cell_types_file) or die "Error, cannot open file: $cell_types_file";
+        while(<$fh>) {
+            chomp;
+            my ($cell_name, $cell_type) = split(/\t/);
+            $cellname_to_celltypes{$cell_name} = $cell_type;
+            $unique_cell_types{$cell_type}++;
+        }
+        close $fh;
     }
-    close $fh;
+    
+    my %data;    
+    my %genotype_counter; # chr => pos => cell_type => HOMREF, HET, and HOMALT counts
+    my %alt_allele_counter; # chrpos => { ref }-> { alt }++
 
+    my $counter = 0;    
+
+    print STDERR "-parsing $allelic_counts_file_list_file\n";
+    {
+        open(my $fh, $allelic_counts_file_list_file) or die "Error, cannot open file: $allelic_counts_file_list_file";
+        while(<$fh>) {
+            chomp;
+            my ($cell_name, $tsv_file) = split(/\t/);
+            unless ($cell_name && $tsv_file) {
+                die "Error, need cell name and tsv_file from $_";
+            }
+            
+            $counter++;
+            print STDERR "[$counter] $tsv_file ";
+            my $cell_type = $cellname_to_celltypes{$cell_name} or die "Error, no cell type for cell: $cell_name";
+            &process_tsv_file($tsv_file, $cell_name, \%data, $min_variant_coverage, \%genotype_counter, $cell_type, \%alt_allele_counter);
+            # if ($counter > 20) { last; }  ## debugging
+        }
+        close $fh;
+    }
+    
 
     print STDERR "## -filtering variants\n";
     &filter_variants(\%data, $min_cells_with_coverage, $min_het_cells_per_snp, $low_range_het_snp_ratio, $high_range_het_snp_ratio);
@@ -179,6 +199,7 @@ main: {
     open(my $ofh_freq, ">$allele_alt_freq_matrix_file") or die $!;
     print $ofh_freq $MM_header;
     
+    
     my $snp_counter = 0;
     foreach my $snp (@chrpos) {
         $snp_counter++;
@@ -215,6 +236,55 @@ main: {
     close $ofh_alt;
     close $ofh_tot;
     close $ofh_freq;
+
+    ## output genotype file
+    print STDERR "-writing genotype info file\n";
+    {
+        my %chrpos_want = map { + $_ => 1 } @chrpos;
+        
+        my $celltype_genotype_file = "$output_prefix.celltype_genotypes";
+        open(my $ofh_genotypes, ">$celltype_genotype_file") or die $!;
+        my @cell_types_list = sort keys(%unique_cell_types);
+        print $ofh_genotypes join("\t", "CHROM", "POS", "REF", "ALT", @cell_types_list) . "\n";
+        my @genotypes_list = ("HOMREF", "HET", "HOMALT");
+        
+        foreach my $chr (sort keys %genotype_counter) {
+            my @positions = sort {$a<=>$b} keys %{$genotype_counter{$chr}};
+            foreach my $pos (@positions) {
+                my $chrpos = join("::", $chr, $pos);
+                unless (exists $chrpos_want{$chrpos}) { next; }
+                
+                my $counter_href = $genotype_counter{$chr}->{$pos};
+                
+
+                my $ref_nuc = $alt_allele_counter{$chrpos}->{REF} or die "Error, no ref nucleotide recorded for $chrpos";
+                
+                my $alt_nucs_href = $alt_allele_counter{$chrpos}->{ALT};
+                my @alt_nucs = reverse sort {$alt_nucs_href->{$a} <=> $alt_nucs_href->{$b} } keys %$alt_nucs_href;
+                my @alt_nucs_toks;
+                foreach my $alt_nuc (@alt_nucs) {
+                    my $count = $alt_nucs_href->{$alt_nuc};
+                    push (@alt_nucs_toks, "$alt_nuc:$count");
+                }
+                my $alt_nucs_tok = join(",", @alt_nucs_toks);
+                
+                my @vals = ($chr, $pos, $ref_nuc, $alt_nucs_tok);
+
+
+                foreach my $cell_type (@cell_types_list) {
+                    my $homref_count = $counter_href->{$cell_type}->{"HOMREF"} || 0;
+                    my $het_count = $counter_href->{$cell_type}->{"HET"} || 0;
+                    my $homalt_count = $counter_href->{$cell_type}->{"HOMALT"} || 0;
+                    my $genotype_token = join(":", $homref_count, $het_count, $homalt_count);
+                    push(@vals, $genotype_token);
+                }
+                print $ofh_genotypes join("\t", @vals) . "\n";
+            }
+        }
+        
+        close $ofh_genotypes;
+    }
+    
     
     print STDERR "-done\n";
 
@@ -224,8 +294,8 @@ main: {
 
 ####
 sub process_tsv_file {
-    my ($tsv_file, $cell_name, $data_href, $min_variant_coverage) = @_;
-            
+    my ($tsv_file, $cell_name, $data_href, $min_variant_coverage, $genotype_counter_href, $cell_type, $alt_allele_counter_href) = @_;
+    
     print STDERR "-processing $cell_name\n";
     
     open(my $fh, $tsv_file) or die "Error, cannot open file: $tsv_file";
@@ -241,7 +311,28 @@ sub process_tsv_file {
             
             $data_href->{$chrpos}->{$cell_name}->{ALT} = $ALT_COUNT;
             $data_href->{$chrpos}->{$cell_name}->{TOT} = $tot_cov;
+
+            my $genotype;
+            # yes, overly simplistic.... just for auditing purposes, not for real genotype assignments.
+            if ($REF_COUNT > 0 && $ALT_COUNT > 0) {
+                $genotype = "HET";
+            }
+            elsif ($REF_COUNT > 0 && $ALT_COUNT == 0) {
+                $genotype = "HOMREF";
+            }
+            elsif ($REF_COUNT == 0 && $ALT_COUNT > 0) {
+                $genotype = "HOMALT";
+            }
+            else {
+                die "error - cannot infer genotype from reads";
+            }
             
+            $genotype_counter_href->{$CONTIG}->{$POSITION}->{$cell_type}->{$genotype}++;
+            
+            if ($ALT_NUCLEOTIDE ne "N") {
+                $alt_allele_counter_href->{$chrpos}->{ALT}->{$ALT_NUCLEOTIDE}++;
+                $alt_allele_counter_href->{$chrpos}->{REF} = $REF_NUCLEOTIDE; 
+            }
         }
     }
     close $fh;
@@ -318,7 +409,6 @@ sub filter_variants {
 sub filter_cells {
     my ($data_href, $min_covered_variants_per_cell, $good_cells_aref) = @_;
     
-
     my %cell_to_variant_counter;
     
     foreach my $snp (keys %$data_href) {
