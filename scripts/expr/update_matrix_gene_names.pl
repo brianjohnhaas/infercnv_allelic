@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-
+use FindBin;
 
 my $usage = "usage: $0 input.mtx\n\n";
 
@@ -10,7 +10,7 @@ my $input_matrix = $ARGV[0] or die $usage;
 
 my %ensg_to_sym;
 {
-    open(my $fh, "ensg_gene_symbol_ids.tsv") or die $!;
+    open(my $fh, "$FindBin::Bin/ensg_gene_symbol_ids.tsv") or die $!;
     while(<$fh>) {
         chomp;
         my ($ensg_id, $symbol) = split(/\t/);
