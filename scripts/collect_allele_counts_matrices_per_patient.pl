@@ -14,6 +14,8 @@ my $usage = <<__EOUSAGE__;
 ###############################################################################
 #
 #  --allelic_counts <str>     file containing list of *.covered_sites.tsv
+#                             format:
+#                                cell_name (tab) /path/to/cell_covered_sites.tsv
 #
 #  --cell_types <str>         file containing cell types and patient identity
 #                             format:
@@ -61,18 +63,30 @@ main: {
         
         my $cell_types_href = $patient_to_cell_types{$patient};
         
+        my $missing_counter = 0;
+        my $found_counter = 0;
         foreach my $cell_name (keys %$cell_types_href) {
             my $cell_type = $cell_types_href->{$cell_name};
             print $patient_cell_types_ofh join("\t", $cell_name, $cell_type) . "\n";
-            my $allelic_file = $cell_to_allelic_file{$cell_name} or die "Error, no allelic file for cell: $cell_name of patient $patient";
+            my $allelic_file = $cell_to_allelic_file{$cell_name};
+            unless ($allelic_file) {
+                ## try abridged cell name
+                $missing_counter++;
+                print STDERR "[missing: $missing_counter]   Error, no allelic file for cell: $cell_name of patient $patient\n";
+                next;
+            
+            }
             print $patient_allele_files_ofh join("\t", $cell_name, $allelic_file) . "\n";
+            $found_counter++;
         }
         
         close $patient_cell_types_ofh;
         close $patient_allele_files_ofh;
         
+        if ($missing_counter / ($missing_counter+$found_counter) > 0.05) {
+            die "Error, missing too many cells";
+        }
         
-    
         my $cmd = "$FindBin::Bin/util/make_allelic_count_matrices.pl --cell_types $patient.cell_types --allelic_counts_file_list_file $patient.allelic_files --output_prefix $patient ";
         &process_cmd($cmd);
         
@@ -110,6 +124,7 @@ sub parse_cell_type_info {
         my ($cell_name, $cell_type, $patient) = split(/\t/);
         
         $cell_type_info{$patient}->{$cell_name} = $cell_type;
+        
     }
     close $fh;
 
@@ -126,18 +141,10 @@ sub parse_cell_to_allelic_file {
     open(my $fh, $allelic_counts_file_list_file) or die "Error, cannot open file: $allelic_counts_file_list_file";
     while(<$fh>) {
         chomp;
-        my $file = $_;
-        my $base = basename($file);
-        
-        if ($base =~ /^(\S+)_qc.bam.duplicates_marked.*/) {
-            my $cell_name = $1;
-            $cell_name =~ s/-/_/g;
-            $cell_name_to_file{$cell_name} = $file;
-        }
-        else {
-            die "Error, couldnt parse cell name from file: $file";
-        }
+        my ($cell_name, $allelic_file) = split(/\t/);
+        $cell_name_to_file{$cell_name} = $allelic_file;
     }
+    
     close $fh;
 
     return(%cell_name_to_file);
