@@ -16,6 +16,9 @@ my $usage = <<__EOUSAGE__;
 #  --allelic_counts <str>     file containing list of *.covered_sites.tsv
 #
 #  --cell_types <str>         file containing cell types and patient identity
+#                             format:
+#                                cell_name (tab) cell_type (tab) patient
+#                             note: <no header line>
 #
 ###############################################################################
 
