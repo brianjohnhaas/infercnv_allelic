@@ -4,7 +4,9 @@ use strict;
 use warnings;
 use File::Basename;
 
-my $usage = "usage: $0 file.list.file\n\n";
+my $usage = "usage: $0 file.list.file\n\n"
+    . " formatting should be:\n"
+    . "cellname (tab) /path/to/rsem.genes.results\n\n";
 
 my $file_list_file = $ARGV[0] or die $usage;
 
@@ -18,20 +20,16 @@ main: {
     open(my $fh, $file_list_file) or die $!;
     while(<$fh>) {
         chomp;
-        my $file = $_;
-        if ($file =~ /\/([^\/]+)_rsem.genes/) {
-            my $cellname = $1;
-            
-            $counter++;
-            print STDERR "-[$counter] processing $file\n";
-            &add_to_expr_matrix($cellname, $file, \%data);
-            $cells{$cellname}++;
+        my ($cellname, $file) = split(/\t/);
+        
+        unless ($cellname && $file) {
+            die "Error, need both cellname and file, only got: $_";
         }
-        else {
-            die "Error, cannot decipher $file";
-        }
-
-        #if ($counter > 10) { last;  }
+        $counter++;
+        print STDERR "-[$counter] processing $file\n";
+        &add_to_expr_matrix($cellname, $file, \%data);
+        $cells{$cellname}++;
+        
     }
     close $fh;
     
