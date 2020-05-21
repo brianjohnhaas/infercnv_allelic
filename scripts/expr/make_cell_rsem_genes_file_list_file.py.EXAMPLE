@@ -1,0 +1,44 @@
+#!/usr/bin/env python
+
+import os, sys, re
+
+
+def main():
+    
+    core_to_rsem_file = dict()
+    with open("local.rsem.genes.results") as fh:
+        for line in fh:
+            line = line.rstrip()
+            bname = os.path.basename(line)
+            core = bname.replace("_R1_001_rsem.genes.results", "")
+            core_to_rsem_file[ core ] = line
+
+            core = core.replace("_R1_rsem.genes.results", "")
+            core_to_rsem_file[ core ] = line
+
+
+    with open("../synovial_sarcoma_terra_samples.txt") as fh:
+        header = next(fh)
+        for line in fh:
+            line = line.rstrip()
+            vals = line.split("\t")
+            cellname = vals[0]
+            reads_filename = vals[12]
+            bname = os.path.basename(reads_filename)
+            
+            core = bname.replace("_R1_001.fastq.gz", "")
+            core = core.replace("_R1.fastq.gz", "") # the weird ones
+
+            if core in core_to_rsem_file:
+                rsem_filename = core_to_rsem_file[ core ]
+                print("\t".join([cellname, rsem_filename]))
+            else:
+                sys.stderr.write("-warning, missing {}\n".format(core))
+
+                
+
+    sys.exit(0)
+
+
+if __name__ == '__main__':
+    main()
